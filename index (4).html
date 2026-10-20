@@ -1,0 +1,115 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>みんなのすてきな瞬間</title><style>
+*{box-sizing:border-box}body{margin:0;background:#eff9ff;color:#355b70;font-family:system-ui,'Noto Sans JP',sans-serif}header{background:#fff;padding:15px;text-align:center;border-bottom:3px solid #b9e7fc}h1{font-size:clamp(22px,4vw,32px);color:#4baedf;margin:0}main{max-width:1200px;margin:auto;padding:12px}.panel{background:white;border-radius:14px;padding:12px;margin-bottom:12px;box-shadow:0 2px 8px #c8e3ee88}.actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}button{border:0;border-radius:12px;padding:12px 15px;min-height:48px;font-size:15px;font-weight:700;background:#e0f3ff;color:#256b93;touch-action:manipulation}button:disabled{opacity:.4}button.primary{background:#43a8df;color:white}button.danger{background:#ffedf0;color:#a94455}label{display:flex;align-items:center;gap:8px}input[type=month]{font-size:16px;padding:8px;border:1px solid #b8d8e9;border-radius:8px}input[type=range]{accent-color:#43a8df;width:150px}.preview{background:#d9edf7;padding:6px;border-radius:12px}canvas{display:block;width:100%;height:auto;background:white;touch-action:none}#status{font-weight:bold;min-height:1.6em}p,footer{font-size:13px;line-height:1.7}#file{display:none}@media(max-width:600px){button{flex:1 1 auto}}
+</style></head><body><header><h1>☁ みんなのすてきな瞬間 ☀</h1><small>Androidタブレット用・固定サイズ自動整列 Ver.17</small></header><main><section class="panel actions"><label>年月 <input id="month" type="month"></label><button id="add">＋ フレーム追加</button><button id="removeFrame" class="danger">選択枠を削除</button><button id="photo">📷 写真を入れる・変更</button><button id="removePhoto" class="danger">写真だけ削除</button></section><section class="panel actions"><strong>選択した枠のサイズ：</strong><button id="smaller">－ 小さく</button><button id="bigger">＋ 大きく</button><span id="sizeLabel">枠を選んでね</span><label>写真の拡大 <input id="zoom" type="range" min="1" max="3.5" step="0.05" value="1"></label><button id="resetPhoto">写真の位置を戻す</button><button class="primary" id="save">JPEG保存（2MB以内）</button></section><div class="preview"><canvas id="preview" width="1122" height="794"></canvas></div><p>A3横（420×297mm）の用紙内に写真を配置します。初期は正方形8枚（横4列×縦2段）。追加や拡大時は、用紙からはみ出さないよう列数とサイズを自動調整します。枠をタップして選択し、「＋ 大きく」「－ 小さく」で固定サイズを切り替えます。<b>隣の枠は自動的に空いているマスへ並び直される</b>ので、枠同士が重なりません。写真は枠をタップして追加。写真入りの枠を<strong>1秒間長押し</strong>して別の枠までドラッグすると、写真を移動できます。移動先に写真があれば2枚を入れ替え、空なら写真だけ移動します。写真をそのまま指で動かすと、<strong>枠内の写真位置を調整</strong>できます。1秒長押ししてから動かすと、<strong>別の枠へ移動・入れ替え</strong>できます。フレーム自体は動きません。スライダーで写真を拡大できます。空きが足りない場合はサイズ変更せずお知らせします。</p><p id="status" role="status" aria-live="polite"></p><footer>写真は端末内だけで処理し、GitHubへ送信しません。編集中の内容は自動保存されないため、完成後にJPEG保存してください。</footer><input id="file" type="file" accept="image/*"></main><script>
+(()=>{'use strict';const $=id=>document.getElementById(id),canvas=$('preview'),ctx=canvas.getContext('2d'),W=1122,H=794;const GAP=9,LEFT=30,TOP=137,AREA_W=1062,AREA_H=600;const sizes=[{w:1,h:1,name:'正方形'},{w:2,h:1,name:'横長'},{w:2,h:2,name:'大'}];let slots=Array.from({length:8},()=>({size:0,img:null,url:null,z:1,x:0,y:0})),selected=-1,rects=[];const say=t=>$('status').textContent=t;const d=new Date();$('month').value=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+function pack(arr){
+  // Keep every frame inside the A3 landscape canvas. Recalculate columns and
+  // cell size when frames are added or resized; preserve 4 x 2 for initial 8.
+  let best=null;
+  for(let cols=3;cols<=7;cols++)for(let rows=2;rows<=12;rows++){
+    const used=Array.from({length:rows},()=>Array(cols).fill(false)),positions=[];
+    let possible=true;
+    for(const slot of arr){
+      const {w,h}=sizes[slot.size];let found=null;
+      for(let y=0;y<=rows-h&&!found;y++)for(let x=0;x<=cols-w&&!found;x++){
+        let ok=true;
+        for(let yy=y;yy<y+h;yy++)for(let xx=x;xx<x+w;xx++)if(used[yy][xx])ok=false;
+        if(ok)found={x,y};
+      }
+      if(!found){possible=false;break}
+      for(let yy=found.y;yy<found.y+h;yy++)for(let xx=found.x;xx<found.x+w;xx++)used[yy][xx]=true;
+      positions.push(found);
+    }
+    if(!possible)continue;
+    const cell=Math.min((AREA_W-GAP*(cols-1))/cols,(AREA_H-GAP*(rows-1))/rows);
+    if(cell<35)continue;
+    const totalW=cols*cell+(cols-1)*GAP,totalH=rows*cell+(rows-1)*GAP;
+    // Prefer larger photographs; for equally sized cells, fill the sheet.
+    const score=cell+0.00001*(totalW*totalH)-0.000001*(cols*rows-arr.length);
+    if(!best||score>best.score)best={score,cols,rows,cell,positions,totalW,totalH};
+  }
+  if(!best)return null;
+  const {cell,positions,totalW,totalH}=best;
+  const x0=LEFT+(AREA_W-totalW)/2,y0=TOP+(AREA_H-totalH)/2;
+  return positions.map((pos,i)=>({
+    x:x0+pos.x*(cell+GAP),y:y0+pos.y*(cell+GAP),
+    w:sizes[arr[i].size].w*cell+(sizes[arr[i].size].w-1)*GAP,
+    h:sizes[arr[i].size].h*cell+(sizes[arr[i].size].h-1)*GAP
+  }));
+}
+function round(c,x,y,w,h,r){c.beginPath();c.roundRect(x,y,w,h,r)}
+function draw(c,edit){c.fillStyle='#fffdf8';c.fillRect(0,0,W,H);c.strokeStyle='#ccebf8';c.lineWidth=4;c.setLineDash([8,7]);round(c,12,12,1098,770,20);c.stroke();c.setLineDash([]);c.fillStyle='#63bce7';c.textAlign='left';c.font='bold 44px sans-serif';c.fillText('みんなのすてきな瞬間',43,82);c.fillStyle='#e5a064';c.font='19px sans-serif';c.fillText('✿ たのしい毎日、キラキラの笑顔 ✿',43,116);c.fillStyle='#829bb2';c.textAlign='right';c.font='17px sans-serif';c.fillText($('month').value.replace('-','年')+'月',1072,112);rects.forEach((r,i)=>{const s=slots[i];c.fillStyle='#edf8ff';round(c,r.x,r.y,r.w,r.h,10);c.fill();c.save();round(c,r.x,r.y,r.w,r.h,10);c.clip();if(s.img){const scale=Math.max(r.w/s.img.width,r.h/s.img.height)*s.z;const dw=s.img.width*scale,dh=s.img.height*scale;c.drawImage(s.img,r.x+(r.w-dw)/2+s.x,r.y+(r.h-dh)/2+s.y,dw,dh)}else{c.fillStyle='#88b4c9';c.textAlign='center';c.font='17px sans-serif';c.fillText('＋ 写真を追加',r.x+r.w/2,r.y+r.h/2)}c.restore();if(edit){c.strokeStyle=i===selected?'#f3a14b':'#b8ddea';c.lineWidth=i===selected?5:2;c.setLineDash(i===selected?[]:[6,5]);round(c,r.x,r.y,r.w,r.h,10);c.stroke();c.setLineDash([])}});c.textAlign='center';c.fillStyle='#93b9cb';c.font='15px sans-serif';c.fillText('✿ ひとつひとつの瞬間が、たいせつな宝物 ✿',561,772)}
+function render(){rects=pack(slots)||[];draw(ctx,true);const s=slots[selected];$('sizeLabel').textContent=s?'現在：'+sizes[s.size].name:'枠を選んでね';$('smaller').disabled=!s||s.size===0;$('bigger').disabled=!s||s.size===2;$('photo').disabled=!s;$('removeFrame').disabled=!s||slots.length<=1;$('removePhoto').disabled=!s?.img;$('zoom').disabled=!s?.img;$('zoom').value=s?.z||1;$('resetPhoto').disabled=!s?.img;$('add').disabled=slots.length>=24}
+function changeSize(delta){if(selected<0)return;const s=slots[selected],next=Math.max(0,Math.min(2,s.size+delta));if(next===s.size)return;const old=s.size;s.size=next;if(!pack(slots)){s.size=old;say('空きスペースが足りません。ほかの枠を小さくするか、不要な枠を削除してください。')}else say('枠のサイズを「'+sizes[next].name+'」に変更し、全フレームを自動整列しました。');render()}
+$('bigger').onclick=()=>changeSize(1);$('smaller').onclick=()=>changeSize(-1);$('add').onclick=()=>{const s={size:0,img:null,url:null,z:1,x:0,y:0};if(!pack([...slots,s])){say('これ以上追加できません。不要な枠を削除してください。');return}slots.push(s);selected=slots.length-1;render()};$('removeFrame').onclick=()=>{if(selected<0||slots.length<=1)return;const s=slots[selected];if(s.url)URL.revokeObjectURL(s.url);slots.splice(selected,1);selected=Math.min(selected,slots.length-1);say('フレームを削除して並び直しました。');render()};$('removePhoto').onclick=()=>{const s=slots[selected];if(!s)return;if(s.url)URL.revokeObjectURL(s.url);Object.assign(s,{img:null,url:null,z:1,x:0,y:0});render()};$('photo').onclick=()=>{if(selected>=0)$('file').click()};$('resetPhoto').onclick=()=>{const s=slots[selected];if(s){s.x=s.y=0;s.z=1;render()}};$('zoom').oninput=e=>{const s=slots[selected];if(s?.img){s.z=+e.target.value;render()}};$('month').onchange=render;
+function point(e){const r=canvas.getBoundingClientRect();return{x:(e.clientX-r.left)*W/r.width,y:(e.clientY-r.top)*H/r.height}}
+function hit(p){for(let i=rects.length-1;i>=0;i--){const r=rects[i];if(p.x>=r.x&&p.x<=r.x+r.w&&p.y>=r.y&&p.y<=r.y+r.h)return i}return -1}
+let drag=null;
+function clearDrag(){if(drag?.timer)clearTimeout(drag.timer);drag=null;render()}
+function swapPhotos(from,to){
+  if(from===to||to<0||!slots[from]?.img)return false;
+  const fields=['img','url','z','x','y'];
+  for(const key of fields){const tmp=slots[from][key];slots[from][key]=slots[to][key];slots[to][key]=tmp}
+  selected=to;return true;
+}
+function clampPhoto(s,r){
+  if(!s.img)return;
+  const scale=Math.max(r.w/s.img.width,r.h/s.img.height)*s.z;
+  const maxX=Math.max(0,(s.img.width*scale-r.w)/2),maxY=Math.max(0,(s.img.height*scale-r.h)/2);
+  s.x=Math.max(-maxX,Math.min(maxX,s.x));s.y=Math.max(-maxY,Math.min(maxY,s.y));
+}
+canvas.addEventListener('contextmenu',e=>e.preventDefault());
+canvas.addEventListener('pointerdown',e=>{
+  if(e.pointerType==='mouse'&&e.button!==0)return;
+  e.preventDefault();
+  if(drag)clearDrag();
+  const p=point(e),i=hit(p);if(i<0)return;
+  selected=i;render();
+  if(!slots[i].img){$('file').click();return}
+  const d={id:e.pointerId,from:i,start:p,last:p,kind:'waiting',target:-1,timer:null,origX:slots[i].x,origY:slots[i].y};
+  drag=d;
+  try{canvas.setPointerCapture(e.pointerId)}catch(_){}
+  d.timer=setTimeout(()=>{
+    if(drag!==d||d.kind!=='waiting')return;
+    d.kind='swap';
+    say('写真を別のフレームまで運んで、指を離してください。');
+  },1000);
+});
+canvas.addEventListener('pointermove',e=>{
+  if(!drag||drag.id!==e.pointerId)return;
+  const d=drag,p=point(e);d.last=p;
+  if(d.kind==='waiting'&&Math.hypot(p.x-d.start.x,p.y-d.start.y)>10){
+    clearTimeout(d.timer);d.timer=null;d.kind='position';
+  }
+  if(d.kind==='position'){
+    const s=slots[d.from],r=rects[d.from];if(!s||!r)return;
+    s.x=d.origX+p.x-d.start.x;s.y=d.origY+p.y-d.start.y;
+    clampPhoto(s,r);draw(ctx,true);return;
+  }
+  if(d.kind!=='swap')return;
+  const target=hit(p);
+  if(target!==d.target){
+    d.target=target;render();
+    if(target>=0&&target!==d.from){
+      const r=rects[target];ctx.save();ctx.strokeStyle='#22b573';ctx.lineWidth=8;ctx.setLineDash([]);round(ctx,r.x,r.y,r.w,r.h,10);ctx.stroke();ctx.restore();
+    }
+  }
+});
+function end(e){
+  if(!drag||drag.id!==e.pointerId)return;
+  const d=drag;
+  if(e.type==='pointerup'){
+    if(d.kind==='swap'){
+      const to=hit(point(e));
+      if(swapPhotos(d.from,to))say(slots[d.from].img?'写真を入れ替えました。':'写真を別のフレームに移動しました。');
+      else say('別のフレームの上で指を離すと写真を移動できます。');
+    }else if(d.kind==='position')say('フレーム内の写真の位置を調整しました。');
+  }
+  clearDrag();
+}
+canvas.addEventListener('pointerup',end);
+canvas.addEventListener('pointercancel',end);
+canvas.addEventListener('lostpointercapture',e=>{if(drag?.id===e.pointerId)clearDrag()});
+$('file').onchange=async e=>{const f=e.target.files?.[0];e.target.value='';const i=selected;if(!f||i<0)return;try{const url=URL.createObjectURL(f),im=await new Promise((ok,bad)=>{const img=new Image();img.onload=()=>ok(img);img.onerror=bad;img.src=url});const s=slots[i];if(!s){URL.revokeObjectURL(url);return}if(s.url)URL.revokeObjectURL(s.url);Object.assign(s,{img:im,url,z:1,x:0,y:0});say('写真を追加しました。');render()}catch(err){say('画像を読み込めませんでした。JPEGなどで試してください。')}};
+const blob=(c,q)=>new Promise(ok=>c.toBlob(ok,'image/jpeg',q));$('save').onclick=async()=>{const btn=$('save');btn.disabled=true;say('JPEGを作成中…');try{let out=null;for(const factor of [3.126,2.5,2,1.5,1]){const c=document.createElement('canvas');c.width=Math.round(W*factor);c.height=Math.round(c.width*297/420);const g=c.getContext('2d');g.scale(c.width/W,c.height/H);draw(g,false);for(const q of [.88,.72,.55,.38]){out=await blob(c,q);if(out&&out.size<=2097152)break}if(out&&out.size<=2097152)break}if(!out||out.size>2097152)throw Error('2MB以内にできませんでした');const u=URL.createObjectURL(out),a=document.createElement('a');a.href=u;a.download='みんなのすてきな瞬間_'+$('month').value+'.jpg';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),15000);say('JPEG保存を開始しました（'+(out.size/1048576).toFixed(2)+'MB）。ダウンロードを確認してください。')}catch(err){say('保存に失敗しました：'+err.message)}finally{btn.disabled=false}};render()})();
+</script></body></html>
